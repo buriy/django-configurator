@@ -1,10 +1,9 @@
-from collections import defaultdict
+from configurator.containers import DictList
 from discovery import site_name, ListFiles
 from traceback import print_exc
+import imp
 import os.path
 import types
-from django.utils.importlib import _resolve_name
-import imp
 
 class AppList(dict):
     def __init__(self):
@@ -24,109 +23,6 @@ class AppList(dict):
         if not args:
             args = (self.default(key),)
         return dict.get(self, key, *args)
-
-class DictList(object):
-    def __init__(self, keys=None, values=None):
-        self._type = None
-        if keys is None:
-            self._keys = []
-        else:
-            self._keys = keys
-        self._values = {}
-        if values is not None:
-            self._keys = values.keys()
-            self._values = dict(values)
-        self._default = None
-
-    def set_type(self, type):
-        if self._type is None:
-            self._type = type
-        elif self._type != type:
-            raise TypeError("Switching type is not allowed (from %s to %s)" % 
-                            (self._type, type))
-
-    def __iadd__(self, key):
-        self.set_type('list')
-        if not key in self._keys:
-            self._keys.append(key)
-        return self
-
-    def __isub__(self, key):
-        self.set_type('list')
-        if key in self._keys:
-            self._keys.remove(key)
-        return self
-
-    def __unicode__(self):
-        if self._type == 'dict':
-            r = []
-            for k in self._keys:
-                r += ["%s => %s" % (k, self._values[k])]
-            return "\n".join(r)
-        elif self._type == 'list':
-            return repr(self._keys)
-        else:
-            return "{}"
-
-    def __str__(self):
-        return unicode(self).encode('utf-8', 'replace')
-
-    def __repr__(self):
-        return unicode(self)
-
-    def __contains__(self, key):
-        return key in self._keys
-
-    def __setitem__(self, key, value):
-        if _DEBUG >= 2: 
-            print "Setting [ key =", key, '] to value =', value
-        if not key in self._keys:
-            self._keys.append(key)
-        self._values[key] = value
-
-    def __getitem__(self, key):
-        if _DEBUG >= 2: print "Getting value at [", key, ']'
-        try:
-            if _DEBUG >= 2: print '->', self._values[key]
-            return self._values[key]
-        except KeyError:
-            if _DEBUG >= 2: print '->', self._default
-            return self._default
-
-    def __iter__(self):
-        for k in self._keys:
-            yield k
-            
-    def keys(self):
-        return self._keys
-    
-    def items(self):
-        return self._values.items()
-    
-    def iterkeys(self):
-        return self._keys.__iter__()
-            
-    def iteritems(self):
-        return self._values.iteritems()
-
-    def empty(self):
-        return self._type is None
-
-    def __get__(self, obj, objtype=None):
-        print "ListDict.__get__"
-
-    def __set__(self, obj, value):
-        print "ListDict.__set__"
-
-    def get_default(self):
-        return self._default
-    
-    def set_default(self, value):
-        self.set_type('dict')
-        self._default = value
-
-    default = property(get_default, set_default)
-
 
 class LazyGetter(object):
     def __init__(self, target):
@@ -171,8 +67,6 @@ class Config(object):
             yield k, v
 
     def __getattr__(self, key):
-        if key == '_app_name':
-            print '_app_name', key
         try:
             return object.__getattribute__(self, key)
         except AttributeError:
@@ -213,7 +107,6 @@ options.ROOT = os.path.dirname(os.path.abspath(__name__))
 options.SITE = site_name()
 
 options.DISCOVERY_ORDER = [
-    ListFiles('django.conf', 'global'), # django/conf/global.py
     ListFiles(options.lazy.CONF, 'global'),# conf/global.py
     ListFiles(options.lazy.CONF, options.lazy.SITE), # conf/<site>.py
     ListFiles(options.lazy.INSTALLED_APPS, 'conf'), # app1/conf.py
@@ -232,11 +125,20 @@ def update_options(source, destination):
             continue
         if k.startswith('_'):
             continue
-        if isinstance(k, (types.ListType, types.TupleType)):
+        if isinstance(k, (list, tuple)):
             k = DictList(keys = k)
+        if isinstance(k, dict):
+            k = DictList(values = k)
         if _DEBUG >= 3: 
-            print 'set', k, '=', v
+            print 'Loading settings key', k, '=', v
         setattr(destination, k, v)
+
+def update_back_settings(source, destination):
+    for opt, value in source.iteritems():
+        if opt.upper() == opt:
+            if _DEBUG >= 3:
+                print 'Updating settings key', opt, '=', value
+            destination[opt] = value
 
 def autodiscover(locals=None):
     from django.utils.importlib import import_module
@@ -245,14 +147,14 @@ def autodiscover(locals=None):
     
     for files in options.DISCOVERY_ORDER:
         for path, name in files:
-            if path.startswith('django.'):
-                continue
+            if path.startswith('django.contrib.admin'):
+                # django.contrib.admin tries to load django.db.utils,
+                # which in turn tries to load settings and fails.
+                continue 
             try:
                 mod = path+ '.' + name.replace('.', '__') 
-                if _DEBUG == 1:
-                    print 'importing', mod
-                if _DEBUG >= 2:
-                    print 'loading', mod
+                if _DEBUG >= 1:
+                    print 'Importing', mod
                 import_module(mod)
                 if _DEBUG >= 3:
                     print 'Ok'
@@ -263,12 +165,10 @@ def autodiscover(locals=None):
                     str(e) != 'No module named %s' % last2:
                     print "Can't import %s:" % mod
                     print_exc()
+                    if not os.isatty(1):
+                        raise
             except Exception:
                 print_exc()
 
     if locals is not None:
-        for opt, value in options.iteritems():
-            if opt.upper() == opt:
-                if _DEBUG >= 3:
-                    print 'Updating settings key', opt
-                locals[opt] = value
+        update_back_settings(options, locals)

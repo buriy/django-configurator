@@ -1,135 +1,107 @@
-(This is draft specification posted on django-developers)
+This application provides a drop-in replacement for django settings.
+It allows you to have different places where you put configuration bits.
+By default, it supposes you will have conf/ directory, where you'll put
+project-wide settings, and files like my_app/conf.py, where application
+will set their settings.
 
-Hi everybody,
+Let's look further into details.
 
-Everyone loves the way templates are discovered in django.
-No one loves settings.py that much.
+Options can be global or belong to applications:
 
-This is proposal on how to improve situation significantly.
+>>> from configurator import options
+>>> options.KEY = 1
+>>> options.apps['myapp'].KEY = 2
+>>> type(options)
+<class 'configurator.Config'>
+>>> type(options.apps)
+<class 'configurator.AppList'>
+>>>  type(options.apps['myapp'])
+<class 'configurator.Config'>
 
-Configuration facility is suggested in addition to django.conf.settings.
-Configuration is going to be put into conf/ directory of the project
-(or settings/ -- just set config.global.CONFIG).
+If the key is missing, DictList is provided:
 
-:: settings.py ::
-from django.conf import config
-from os.path import dirname, abspath, join
-ROOT = dirname(abspath(__name__)) # type 'str'
-INSTALLED_APPS = ...
+from configurator import options
+>>> KEY = options.SOME_KEY 
+>>> type(KEY)
+<class 'configurator.containers.DictList'>
+>>> id(KEY) == id(options.SOME_KEY)
+True
 
-config.global.ROOT = ROOT
-options.CONFIG = join(ROOT, 'conf')
-config.autodiscover()
-# options is in fact a synonym for settings
+Next concept is DictList.
+DictList is options holder and it allows one to set a global option in
+advance, providing data from one module to another, not having to deal
+with applications order in INSTALLED_APPS.
 
-:: conf/global.py ::
-# runs before the app settings
-from django.conf import config
-from os.path import dirname, abspath
-ROOT = options.ROOT # type 'str', empty if not set.
-options.JQUERY.default = JQUERY = ROOT +
-'static/js/jquery-1.3.2-min.js' # type 'dict', setting default value
-for missing items
-options.JQUERY['1.3.2'] = JQUERY # type 'unordered dict with
-default value', now setting arbitrary key
-options.MEDIA += [ROOT + 'static/js/'] # type 'ordered set with
-default value'
-options.DATABASES['default'] = {...} # backward-compatibility,
-so using 'default' not .default!
-# Note: after type is set for constant, the type can't be changed.
-# Note: please set to tuple not list if you need a clear sign the
-option won't be additive any more.
+Can be used as an ordered set:
 
-:: conf/global_overrides.py ::
-# runs after all other settings but before <site>_overrides, see below
-# is now empty
+>>> KEY += 'xxx'
+>>> KEY
+['xxx']
+>>> KEY -= 'yyy'
+>>> KEY += 'yyy'
+>>> KEY 
+['xxx', 'yyy']
+>>> KEY -= 'xxx'
+['yyy']
 
-:: conf/apps/myapp.py ::
-# runs after all app-specific settings
-app.DATABASES['db3'] = {...}
-app.ROUTERS += ['Db3_is_readonly']
+In Django, this can be used for AUTHENTICATION_BACKENDS,
+TEMPLATE_CONTEXT_PROCESSORS, MIDDLEWARE_CLASSES, ADMINS,
+LANGUAGES and other settings.
 
-:: conf/www_server_com.py
-# runs before app-specific settings
-from django.conf import config
-options.MEDIA_ROOT = '/var/site/www.server.com/site_media/'
-options.MEDIA_URL = 'media.server.com'
-app.MIDDLEWARE += ['caching.smart_caching_app.SmartCacher']
+Or as an ordered dict:
+>>> D = DictList()
+>>> D['abc'] = 'def'
+>>> D['key'] = 'value'
+>>> D.default = '(default)'
+>>> D
+{default=(default), 'abc': 'def', 'key': 'value'}
+In Django, this can be used for DATABASES setup, and, i hope, in 1.3,
+for LOGGING setup and APP_MEDIA setup.
 
-:: conf/www_server_com_overrides.py
-# runs after app-specific settings
-options.JQUERY['1.3.2'] = 'static/packed.js'
-options.JQUERY['1.4.2'] = 'static/packed.js'
+Currently Django's SortedDict is not used for DictList to not depend on
+Django.
 
-:: myapp/conf.py ::
-# runs in order specified in INSTALLED_APPS
-from django.conf import options, apps
-app = apps['myapp']
-app.DEPENDS += ['django.contrib.auth']
-app.STATIC = app.options.ROOT + 'media/myapp/'
-app.IMAGES = app.options.ROOT + 'media/uploads/images/'
-app.THUMBS = app.options.ROOT + 'media/uploads/thumbs/'
-options.MEDIA += [app.IMAGES, app.THUMBS, app.JSES, app.CSSES]
-options.JQUERY['1.4.2'] = STATIC + 'js/'
-options.TAGS += ['app1.templatetags.mytags']
+The next concept is autodiscover. It allows you to have different
+configuration bits for every application or for different computers.
+For basic use in django applications, you can put this call in the end
+of the settings.py:
 
-:: myapp/forms.py ::
-from django.conf import config
+autodiscover(locals())
 
-app = config.apps['myapp']
-class MyForm:
-   class Media:
-       css = app.STATIC + 'css/base.css'
-       js = options.JQUERY['1.4.2']
+It does the following:
+ 1) puts all written in caps settings from settings.py into options,
+    wrapping lists, tuples and dicts into DictList
+ 2) iterates over options.DISCOVERY_ORDER, defined by default as
+    the following:
 
-The ultimate order:
+options.DISCOVERY_ORDER = [
+    ListFiles(options.lazy.CONF, 'global'),# conf/global.py
+    ListFiles(options.lazy.CONF, options.lazy.SITE), # conf/<site>.py
+    ListFiles(options.lazy.INSTALLED_APPS, 'conf'), # app1/conf.py
+    ListFiles(options.lazy.APP_CONF, options.lazy.INSTALLED_APPS), # conf/app1.py
+    ListFiles(options.lazy.CONF, 'global', '_overrides'), # conf/global_overrides.py
+    ListFiles(options.lazy.CONF, options.lazy.SITE, '_overrides'), # conf/<site>_overrides.py
+]
+You can set or update any option in those files, you can also modify the
+order they are iterated.
 
-django/conf/global.py
-conf/__init__.py
-conf/global.py    #  -- you can also set your own personal order there
-conf/<site*>.py
-app1/conf.py # -- single pass is enough, cause applications can both
-provide callbacks for later configuration stages.
-app2/conf.py
-...
-appN/conf.py
-conf/apps/app1.py
-conf/apps/app2.py
-conf/apps/appN.py
-conf/global_overrides.py
-conf/<site*>_overrides.py
+Please note, that this DISCOVERY_ORDER is lazy, and you can set
+options.CONF to your own folder in settings.py, or do any other thing
+before DISCOVERY_ORDER will be evaluated.
 
-*<site> for www.my-site.com is www_my__site_com (dots replaced with
-underlines, dash with double underline).
-socket.getfqdn() is used for determining current site.
+ 3) writes updated settings back to settings.py 
 
-The motivation is simple:
-the bigger your list of application grows, the larger configuration
-you will have!
-Django has more than 100 of different settings options.
-They are not even grouped now.
-I hope such django "built-in" type of configuration will suit 99% of
-the possible Django projects, and will make django community much
-stronger.
+If you don't want to change anything in settings.py, you can do
+autodiscover(), update_options() and update_back_settings() manually at
+any moment of time.
 
-I'm going to create a prototype.
+Exceptions, raised in configuration modules, are isolated. If one of
+your conf files failed to load, console message will appear, or, in
+addition to the message, application will fail with traceback if console
+is not a tty.
 
-Expected benefits:
- - 3rd-party applications can be used without a bit of touching and
-still customized perfectly.
- - Application can connect to each other in dynamic way, or provide
-different kinds of plugin points.
- - Fixed models dependencies can be replaced with dynamic (i.e, each
-application might ask for personal User or UserProfile replacement)
- - Really simple media setup for both development and production servers.
- - A number of development and production configurations can coexist
-in the project, without single 'if'
- - Per-application configuration for middlewares, databases, routers,
-context processors and other "additive" options
- - Preconditions for visual application settings (Needs another proposal)
- - Django core settings will be moved to namespaces and grouped semantically.
- - Sparse config is better than dense.
+Known issues: since global django settings are read and set
+independently from settings.py, they don't know anything about each
+other. So if you do AUTHENTICATION_BACKENDS += 'logins.MyBackend', no
+django.contrib.auth.backends.ModelBackend will be added.
 
-Why it needs to be in the django core, not just 3rd-party plugin:
- - Because "Namespaces are one honking great idea -- let's do more of those!"
- - Because config ubiquity between projects is the main project benefit.
