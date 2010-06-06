@@ -95,7 +95,7 @@ _DEBUG = 0
 
 def set_debug_level(level):
     global _DEBUG
-    old_level, _DEBUG = level
+    old_level, _DEBUG = _DEBUG, level
     return old_level
 
 options = Config()

@@ -1,7 +1,7 @@
 This application provides a drop-in replacement for django settings.
 It allows you to have different places where you put configuration bits.
 By default, it supposes you will have conf/ directory, where you'll put
-project-wide settings, and files like my_app/conf.py, where application
+project-wide settings, and files like my_app/conf.py, where applications
 will set their settings.
 
 Let's look further into details.
