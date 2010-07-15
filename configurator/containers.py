@@ -59,6 +59,9 @@ class DictList(object):
             self._keys.append(key)
         return self
 
+    def __len__(self):
+        return len(self._keys)
+
     def __isub__(self, key):
         self.set_type('list')
         if key in self._keys:
