@@ -115,13 +115,13 @@ options.DISCOVERY_ORDER = [
     ListFiles(options.lazy.CONF, options.lazy.SITE, '_overrides'), # conf/<site>_overrides.py
 ]
 
-def update_options(source, destination):
+def convert_to_options(source, destination):
     for k, v in source.iteritems():
         if isinstance(k, types.ModuleType):
             continue
         if k is options:
             continue
-        if not k.upper() == k:
+        if not k.isupper():
             continue
         if k.startswith('_'):
             continue
@@ -133,17 +133,25 @@ def update_options(source, destination):
             print 'Loading settings key', k, '=', v
         setattr(destination, k, v)
 
-def update_back_settings(source, destination):
+def copy_all(source, destination):
     for opt, value in source.iteritems():
-        if opt.upper() == opt:
+        if opt.isupper():
             if _DEBUG >= 3:
                 print 'Updating settings key', opt, '=', value
             destination[opt] = value
 
+def import_from_module(locals, module):
+    from django.utils.importlib import import_module
+    config = Config()
+    mod = import_module(module)
+    data = dict([(k, getattr(mod, k)) for k in dir(mod)])
+    convert_to_options(data, config)
+    copy_all(config, locals)
+
 def autodiscover(locals=None):
     from django.utils.importlib import import_module
     if locals is not None:
-        update_options(locals, options)
+        convert_to_options(locals, options)
     
     for files in options.DISCOVERY_ORDER:
         for path, name in files:
@@ -171,4 +179,4 @@ def autodiscover(locals=None):
                 print_exc()
 
     if locals is not None:
-        update_back_settings(options, locals)
+        copy_all(options, locals)
